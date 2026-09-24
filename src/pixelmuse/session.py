@@ -210,6 +210,17 @@ def save_contact_sheet(state: AppState, path: str | Path, columns: int = 4) -> P
     return imgio.save_image(sheet, path)
 
 
+def save_pdf(state: AppState, path: str | Path) -> Path:
+    """One image per page, for a quick printed overview of a batch."""
+    if not state.results:
+        raise RuntimeError("There is nothing to save yet")
+    payload = export.batch_to_pdf_bytes(state.results)
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(payload)
+    return target
+
+
 def summary(state: AppState) -> str:
     """One-line description of the current selection, used in status bars."""
     if not state.selected:
@@ -239,5 +250,6 @@ __all__ = [
     "save_all",
     "save_zip",
     "save_contact_sheet",
+    "save_pdf",
     "summary",
 ]

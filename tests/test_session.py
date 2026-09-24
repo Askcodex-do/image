@@ -143,6 +143,10 @@ def test_save_helpers(state, tmp_path):
     sheet = session.save_contact_sheet(state, tmp_path / "sheet.png", columns=2)
     assert sheet.exists() and sheet.stat().st_size > 0
 
+    pdf = session.save_pdf(state, tmp_path / "batch.pdf")
+    assert pdf.read_bytes().startswith(b"%PDF")
+    assert pdf.stat().st_size > 1000
+
 
 def test_save_without_results_is_an_error(state, tmp_path):
     with pytest.raises(RuntimeError):
@@ -151,6 +155,8 @@ def test_save_without_results_is_an_error(state, tmp_path):
         session.save_all(state)
     with pytest.raises(RuntimeError):
         session.save_zip(state, tmp_path / "nope.zip")
+    with pytest.raises(RuntimeError):
+        session.save_pdf(state, tmp_path / "nope.pdf")
 
 
 def test_styles_grouped_covers_every_style():

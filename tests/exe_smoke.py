@@ -65,6 +65,7 @@ def check_generation(exe: Path, workdir: Path, styles: list[str]) -> None:
             "--out", str(out_dir),
             "--zip", str(workdir / "batch.zip"),
             "--sheet", str(workdir / "sheet.png"),
+            "--pdf", str(workdir / "batch.pdf"),
         ],
     )
     assert result.returncode == 0, f"`generate` exited with {result.returncode}"
@@ -88,6 +89,9 @@ def check_generation(exe: Path, workdir: Path, styles: list[str]) -> None:
 
     sheet = workdir / "sheet.png"
     assert sheet.exists() and sheet.stat().st_size > 1000, "contact sheet was not written"
+
+    pdf = workdir / "batch.pdf"
+    assert pdf.exists() and pdf.read_bytes().startswith(b"%PDF"), "pdf was not written"
 
 
 def check_reproducible_seed(exe: Path, workdir: Path) -> None:

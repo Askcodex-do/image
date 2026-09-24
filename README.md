@@ -129,7 +129,7 @@ python app_cli.py generate photo.jpg --style all -n 2 ^
 | `--colors` | palette size hint for the quantising styles |
 | `--seed` | reproduce an exact batch |
 | `--format` | `.png`, `.jpg`, `.webp`, `.bmp` |
-| `--zip`, `--sheet` | also write a zip / a contact sheet PNG |
+| `--zip`, `--sheet`, `--pdf` | also write a zip / contact sheet PNG / multi-page PDF |
 | `--frame`, `--no-texture`, `--no-vignette` | finish toggles |
 
 ## Browser mode (optional)

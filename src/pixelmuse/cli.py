@@ -58,6 +58,8 @@ def _build_parser() -> argparse.ArgumentParser:
                      help="also write every result into this zip file")
     gen.add_argument("--sheet", dest="sheet_path", default=None,
                      help="also write a contact sheet PNG of the results")
+    gen.add_argument("--pdf", dest="pdf_path", default=None,
+                     help="also write a multi-page PDF, one image per page")
     return parser
 
 
@@ -132,6 +134,13 @@ def cmd_generate(args: argparse.Namespace) -> int:
         sheet = build_contact_sheet(results, columns=min(4, max(1, len(results))))
         sheet_target = imgio.save_image(sheet, args.sheet_path)
         print(f"Wrote {sheet_target}")
+
+    if args.pdf_path:
+        payload = export.batch_to_pdf_bytes(results)
+        pdf_target = Path(args.pdf_path)
+        pdf_target.parent.mkdir(parents=True, exist_ok=True)
+        pdf_target.write_bytes(payload)
+        print(f"Wrote {pdf_target} ({len(payload) / 1024:.0f} KiB)")
 
     return 0
 

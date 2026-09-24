@@ -251,6 +251,9 @@ class PixelMuseApp:
         )
         self.sheet_button.grid(row=row, column=0, sticky="ew", pady=(4, 0))
         row += 1
+        self.pdf_button = ttk.Button(frame, text="Save as PDF...", command=self._save_pdf)
+        self.pdf_button.grid(row=row, column=0, sticky="ew", pady=(4, 0))
+        row += 1
         self.clear_button = ttk.Button(frame, text="Clear results", command=self._clear_results)
         self.clear_button.grid(row=row, column=0, sticky="ew", pady=(4, 0))
 
@@ -301,6 +304,7 @@ class PixelMuseApp:
             self.save_all_button,
             self.zip_button,
             self.sheet_button,
+            self.pdf_button,
             self.clear_button,
             self.prev_button,
             self.next_button,
@@ -506,6 +510,23 @@ class PixelMuseApp:
             return
         try:
             target = session.save_contact_sheet(self.state, path)
+        except Exception as exc:
+            messagebox.showerror(APP_NAME, str(exc))
+            return
+        self.status.configure(text=f"Saved {target}")
+
+    def _save_pdf(self) -> None:
+        if not self.state.results:
+            messagebox.showinfo(APP_NAME, "Generate some images first.")
+            return
+        path = filedialog.asksaveasfilename(
+            title="Save PDF", initialfile="pixelmuse_batch.pdf",
+            defaultextension=".pdf", filetypes=[("PDF", "*.pdf")],
+        )
+        if not path:
+            return
+        try:
+            target = session.save_pdf(self.state, path)
         except Exception as exc:
             messagebox.showerror(APP_NAME, str(exc))
             return
