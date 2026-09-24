@@ -181,3 +181,145 @@ def test_options_propagate_through_state(state):
 
     difference = float(np.abs(C.to_array(first.image) - C.to_array(second.image)).mean())
     assert difference > 0.005
+
+
+# ---------------------------------------------------------------------------
+# Text-guided mode
+# ---------------------------------------------------------------------------
+
+
+def test_can_describe_needs_an_image_and_words(state):
+    assert not state.can_describe          # no description yet
+    state.description = "   "
+    assert not state.can_describe          # whitespace is not a description
+    state.description = "add a crown"
+    assert state.can_describe
+
+
+def test_can_describe_does_not_need_styles(state):
+    """The description drives this mode; style checkboxes are irrelevant."""
+    state.selected = []
+    state.description = "make it snow"
+    assert state.can_describe
+
+
+def test_describe_sync_requires_input(state):
+    with pytest.raises(RuntimeError):
+        session.describe_sync(state)
+
+
+def test_describe_sync_passes_settings_and_stores_results(state, monkeypatch):
+    captured = {}
+
+    def fake_generate_batch(settings, source, progress=None):
+        captured["settings"] = settings
+        captured["source"] = source
+        return [session.RenderedImage(
+            image=synthetic_photo(64, 64), style_key=settings.style_key,
+            style_label=settings.style_label, variant=0, seed=1,
+            width=64, height=64, seconds=0.1,
+        )], []
+
+    monkeypatch.setattr(session.textguide, "generate_batch", fake_generate_batch)
+
+    state.description = "make this an old princess in a black dress and a crown"
+    state.describe_style = "oil_realism"
+    state.describe_count = 16
+    state.describe_side = 640
+    results = session.describe_sync(state)
+
+    assert len(results) == 1
+    assert state.results == results
+    assert state.result_index == 0
+    assert captured["settings"].count == 16
+    assert captured["settings"].output_side == 640
+    assert captured["settings"].description.startswith("make this an old princess")
+    assert captured["settings"].style_prompt == session.style_prompts.prompt_for("oil_realism")
+
+
+def test_describe_sync_records_warnings_without_raising(state, monkeypatch):
+    """Partial batches must still reach the user, with an explanation."""
+    monkeypatch.setattr(
+        session.textguide, "generate_batch",
+        lambda settings, source, progress=None: ([], ["image 1 failed: service busy"]),
+    )
+    state.description = "add a crown"
+    results = session.describe_sync(state)
+    assert results == []
+    assert state.warnings == ["image 1 failed: service busy"]
+
+
+def test_describe_async_reports_back(state, monkeypatch):
+    import threading
+
+    def fake_generate_batch(settings, source, progress=None):
+        return [session.RenderedImage(
+            image=synthetic_photo(32, 32), style_key="noir", style_label="Film Noir",
+            variant=0, seed=1, width=32, height=32, seconds=0.1,
+        )], []
+
+    monkeypatch.setattr(session.textguide, "generate_batch", fake_generate_batch)
+    state.description = "make it noir"
+
+    finished = threading.Event()
+    seen = {}
+
+    def done(images, error):
+        seen["images"] = images
+        seen["error"] = error
+        finished.set()
+
+    session.describe_async(state, done=done)
+    assert finished.wait(15), "worker thread did not finish"
+    assert seen["error"] is None
+    assert len(seen["images"]) == 1
+
+
+def test_describe_async_surfaces_errors(state, monkeypatch):
+    import threading
+
+    def boom(settings, source, progress=None):
+        raise session.textguide.TextGuidedError("no network")
+
+    monkeypatch.setattr(session.textguide, "generate_batch", boom)
+    state.description = "add a crown"
+
+    finished = threading.Event()
+    seen = {}
+
+    def done(images, error):
+        seen["images"] = images
+        seen["error"] = error
+        finished.set()
+
+    session.describe_async(state, done=done)
+    assert finished.wait(15)
+    assert seen["images"] == []
+    assert isinstance(seen["error"], session.textguide.TextGuidedError)
+
+
+def test_describe_choices_match_the_catalog(state):
+    choices = session.describe_choices()
+    keys = [key for key, _ in choices]
+    assert "oil_realism" in keys
+    assert all(label for _, label in choices)
+
+
+def test_summary_reflects_describe_mode(state):
+    state.mode = "describe"
+    state.description = "make this an old princess wearing a crown"
+    state.describe_style = "oil_realism"
+    state.describe_count = 16
+    state.describe_side = 512
+    text = session.summary(state)
+    assert "Oil Painting (Realism)" in text
+    assert "16 image(s)" in text
+    assert "old princess" in text
+
+
+def test_summary_unchanged_in_style_mode(state):
+    state.mode = "styles"
+    state.selected = ["oil_painting"]
+    state.variants = 4
+    assert "style(s)" in session.summary(state)
+

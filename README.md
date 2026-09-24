@@ -1,23 +1,47 @@
-# PixelMuse - offline AI image generator
+# PixelMuse - AI image generator
 
-Turn one picture into many styled pictures, on your own machine, with no
-internet connection and no GPU.
+Turn one picture into many pictures. Two modes, one app:
 
-You open an image, tick the descriptions you want from a multiple-choice list
-(oil painting, oil painting realism, digital sketch, watercolour, pixel art,
-and more), choose how many images to make, and save the results you like to
-your PC.
+1. **Style filters** (offline, fast). Tick the looks you want from a
+   multiple-choice list (oil painting, oil painting realism, digital sketch,
+   watercolour, pixel art, and more), choose how many images to make, and save
+   the ones you like to your PC. No internet, no GPU, nothing uploaded.
+2. **Describe a change** (needs internet). Upload a photo, pick a look, say
+   what should happen - *"make this an old princess wearing a black dress and a
+   crown"* - choose how many images you want (up to 16), and get that many
+   different versions of *your* photo with the change applied.
 
 Works on the machine you described: **Windows 8.1, 2 GB RAM, Python 3.10.11**.
 
 ---
 
+## The two modes, honestly compared
+
+| | Style filters | Describe a change |
+|---|---|---|
+| Internet needed | No | Yes |
+| Speed | ~0.5-1.5 s per image | ~5-60 s per image |
+| Can add new things (a crown, a dress) | No - only repaints what is there | Yes |
+| Cost | Free, forever | Free, no account or API key |
+| Privacy | Nothing leaves the machine | The photo is sent to the image service |
+
+The second mode exists because no offline model can do what it does on 2 GB of
+RAM - Stable Diffusion alone needs several gigabytes. So the offline mode stays
+the default and the generative mode is opt-in, clearly labelled in the app.
+
+**About reliability in the AI mode.** The free image service needs no account,
+but it is shared, so requests occasionally fail. Measured over a real batch of
+16, roughly one in eight comes back as a server error. Every image is therefore
+retried automatically with a growing pause, and if one still fails you get the
+other fifteen plus a note saying what happened, rather than an empty screen.
+
 ## Why this runs on 2 GB of RAM
 
-There is no neural network to download and no GPU to warm up. The styles are
-real image-processing algorithms - Kuwahara edge-preserving smoothing,
-directional brush smears, XDoG line extraction, colour-dodge pencil rendering,
-ordered dithering, palette quantisation - written on top of Pillow and NumPy.
+For the offline mode there is no neural network to download and no GPU to warm
+up. The styles are real image-processing algorithms - Kuwahara edge-preserving
+smoothing, directional brush smears, XDoG line extraction, colour-dodge pencil
+rendering, ordered dithering, palette quantisation - written on top of Pillow
+and NumPy.
 
 That choice is deliberate:
 
@@ -33,15 +57,23 @@ The memory ceiling is respected everywhere: images are downscaled to a working
 canvas before rendering, variants are produced one at a time, and results can
 be freed from the UI with one button.
 
+The AI mode is careful with memory for a different reason - each image is
+fetched, decoded and handed straight back to the UI, so peak usage stays near
+one image rather than sixteen.
+
 ## What it looks like
 
 The desktop app has three columns:
 
 1. **Choose a style** - checkbox list grouped into Painting and Drawing, each
-   with a one-line description.
+   with a one-line description. (Hidden in AI mode, where the *Look* dropdown
+   replaces it.)
 2. **Preview** - before/after with next/previous through the batch.
-3. **Settings & save** - images per style, detail, strength, working size,
-   texture/vignette/border toggles, a seed box, and the save buttons.
+3. **Settings & save** - a **Mode** switch at the top, then either the offline
+   knobs (images per style, detail, strength, working size, texture/vignette/
+   border toggles) or the AI controls (what should change, look, number of
+   images, output size), a seed box, and the save buttons.
+
 
 ## The styles
 
@@ -103,9 +135,49 @@ This creates a virtual environment, installs dependencies, runs the test suite,
 and only then packages `dist\PixelMuse.exe`. If the tests fail it refuses to
 build, so you will not get a broken executable.
 
+## Describe a change (AI mode)
+
+The mode that adds things that were never in the photo.
+
+**In the app:** open your image, switch **Mode** to *Describe a change*, type
+what you want in the box, pick a *Look*, set the number of images (1-16) and the
+output size, then press **Create from description**.
+
+Example: upload a portrait, choose *Oil Painting (Realism)*, type
+`make this an old princess wearing a black dress and a crown`, set 16 images.
+You get 16 different paintings of your photo, each wearing the dress and crown,
+which you can step through with *Previous* / *Next* and save one at a time, or
+all at once as a folder, ZIP, contact sheet or PDF.
+
+**From the command line:**
+
+```bat
+python app_cli.py describe photo.jpg ^
+    -d "make this an old princess wearing a black dress and a crown" ^
+    -t oil_realism -n 16 --side 768 -o outputs --zip outputs/batch.zip
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `-d, --description` | what should change (required) |
+| `-t, --look` | style key, same names as the offline list; default `oil_realism` |
+| `-n, --count` | how many images to create (1-16) |
+| `--side` | output size in pixels: 512, 640 or 768 |
+| `-o, --out` | output folder |
+| `--seed` | reproducible results |
+| `--zip`, `--sheet`, `--pdf` | also write a zip / contact sheet PNG / multi-page PDF |
+
+**What it sends, and where.** Your photo is downscaled to fit inside a 384 px
+JPEG, base64-encoded into the request URL, and sent to a public image service
+together with your text. The photo goes to that service and is not stored by
+this app. Requests are trimmed to stay under the service's ~16 KB URL limit
+(HTTP 431 if exceeded), which is why the reference is small rather than
+full-size. If you would rather nothing left your machine, use the offline mode.
+
 ## Command line
 
 Useful for batch work, or on a machine where you would rather not open a window.
+
 
 ```bat
 python app_cli.py list
@@ -116,6 +188,9 @@ python app_cli.py generate photo.jpg --style oil_painting --style pixel_art ^
 :: every style at once, plus a zip and a contact sheet
 python app_cli.py generate photo.jpg --style all -n 2 ^
     -o outputs --zip outputs/batch.zip --sheet outputs/sheet.png
+
+:: AI mode: change the photo from a text description
+python app_cli.py describe photo.jpg -d "give this person a gold crown" -n 16
 ```
 
 | Flag | Meaning |
@@ -143,9 +218,9 @@ pip install -r requirements-web.txt
 python app_web.py
 ```
 
-Then open <http://127.0.0.1:8000>. The page has the same style picker, shows the
-results inline with a save link on each image, and offers the whole batch as a
-ZIP.
+Then open <http://127.0.0.1:8000>. The page has the same mode switch, style
+picker and *Describe a change* box as the desktop app, shows the results inline
+with a save link on each image, and offers the whole batch as a ZIP.
 
 ## Memory guide
 
@@ -161,6 +236,10 @@ Pick the working size that matches what you have free:
 Measured peak Python allocation for six styles at 1400 px with two variants
 each (12 images) was **283 MB**, in about 9 seconds total.
 
+The AI mode is bounded differently: one image is in flight at a time, so peak
+memory depends on the output size, not the count. A 16-image batch at 768 px
+never holds more than a couple of images at once.
+
 ## Project layout
 
 ```
@@ -174,7 +253,9 @@ src/pixelmuse/
     catalog_draw.py    the drawing family
     effects/core.py    numeric helpers: colour, texture, edges, framing
     generator.py       rendering engine and RAM-bounded batching
-    session.py         headless app state shared by both UIs
+    textguide.py       AI mode: text-guided image creation and retries
+    style_prompts.py   maps style keys onto prompt phrases
+    session.py         headless app state shared by all three UIs
     gui.py             Tkinter view
     web.py             Flask view
     export.py          save batch / zip / PDF / contact sheet
@@ -192,9 +273,19 @@ pip install -r requirements.txt -r requirements-web.txt pytest
 python -m pytest tests -q
 ```
 
-84 tests cover every style rendering a real non-degenerate image, variant
+127 tests cover every style rendering a real non-degenerate image, variant
 diversity, seed reproducibility, export formats, the headless session, the web
-API, and the CLI's error handling.
+API, the CLI's error handling, and the AI mode - including its prompt building,
+URL-budgeted reference encoding, and its retry, partial-failure and
+total-failure paths.
+
+The AI-mode tests run against a local stand-in server, so the suite still passes
+with no internet connection. To exercise the real service instead:
+
+```bat
+set PIXELMUSE_LIVE_TEST=1
+python -m pytest tests/test_textguide.py -q
+```
 
 To verify a built executable the way CI does:
 

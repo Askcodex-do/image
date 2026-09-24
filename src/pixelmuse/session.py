@@ -14,7 +14,7 @@ from typing import Callable, Dict, List, Optional, Sequence
 
 from PIL import Image
 
-from . import export, imgio
+from . import export, imgio, style_prompts, textguide
 from .generator import (
     DEFAULT_MAX_SIDE,
     DEFAULT_VARIANTS,
@@ -50,6 +50,17 @@ class AppState:
     result_index: int = 0
     output_dir: Path = field(default_factory=lambda: Path.cwd() / "outputs")
     format_ext: str = ".png"
+    #: "styles" repaints the photo offline; "describe" sends it to the
+    #: generative service with a text description and changes its content.
+    mode: str = "styles"
+    #: Text-guided settings, kept next to the offline ones so switching modes
+    #: does not lose what the user typed.
+    description: str = ""
+    describe_style: str = "oil_realism"
+    describe_count: int = DEFAULT_VARIANTS
+    describe_side: int = 512
+    #: Non-fatal problems from the last text-guided run, shown in the status bar.
+    warnings: List[str] = field(default_factory=list)
 
     @property
     def current_result(self) -> Optional[RenderedImage]:
@@ -65,6 +76,11 @@ class AppState:
     @property
     def can_render(self) -> bool:
         return self.has_source and bool(self.selected)
+
+    @property
+    def can_describe(self) -> bool:
+        """Text-guided mode needs a photo and some words; styles are optional."""
+        return self.has_source and bool(self.description.strip())
 
 
 def load_source(state: AppState, path: str | Path, preview_side: int = 512) -> AppState:
@@ -177,6 +193,67 @@ def render_async(
     return thread
 
 
+def describe_sync(
+    state: AppState,
+    progress: Optional[ProgressFn] = None,
+) -> List[RenderedImage]:
+    """Create images from the description on the calling thread.
+
+    Failures for individual images are collected in ``state.warnings`` rather
+    than raised, so a batch of 16 still delivers whatever came back.
+    """
+    if not state.can_describe:
+        raise RuntimeError("Load an image and describe the change first")
+
+    settings = textguide.BatchSettings(
+        style_key=state.describe_style,
+        style_label=style_prompts.label_for(state.describe_style),
+        style_prompt=style_prompts.prompt_for(state.describe_style),
+        description=state.description.strip(),
+        count=state.describe_count,
+        output_side=state.describe_side,
+        seed=state.seed,
+    )
+    results, warnings = textguide.generate_batch(settings, state.source_image, progress=progress)
+    state.warnings = warnings
+    if results:
+        add_results(state, results)
+        state.result_index = 0
+    return results
+
+
+def describe_async(
+    state: AppState,
+    progress: Optional[ProgressFn] = None,
+    done: Optional[DoneFn] = None,
+) -> threading.Thread:
+    """Run :func:`describe_sync` on a daemon thread and report back."""
+
+    def worker() -> None:
+        error: Optional[BaseException] = None
+        produced: List[RenderedImage] = []
+        try:
+            produced = describe_sync(state, progress=progress)
+        except BaseException as exc:  # surfaced to the UI, not swallowed
+            error = exc
+        if done is not None:
+            done(produced, error)
+
+    thread = threading.Thread(target=worker, name="pixelmuse-describe", daemon=True)
+    thread.start()
+    return thread
+
+
+def describe_choices() -> List[tuple]:
+    """``(key, label)`` pairs for the text-guided look picker."""
+    return [(key, style_prompts.label_for(key)) for key, _ in style_prompts.style_choices()]
+
+
+def service_available() -> bool:
+    """True when the text-guided service can be reached (used to warn early)."""
+    return textguide.service_available()
+
+
 def save_current(state: AppState, path: str | Path) -> Path:
     """Save the image currently shown."""
     item = state.current_result
@@ -223,6 +300,12 @@ def save_pdf(state: AppState, path: str | Path) -> Path:
 
 def summary(state: AppState) -> str:
     """One-line description of the current selection, used in status bars."""
+    if state.mode == "describe":
+        look = style_prompts.label_for(state.describe_style)
+        sized = f"{state.describe_count} image(s), {state.describe_side} px"
+        if state.description.strip():
+            return f"{look}: \"{state.description.strip()[:60]}\" | {sized}"
+        return f"{look} | {sized}"
     if not state.selected:
         return "No styles selected"
     labels = [get_style(key).label for key in state.selected]
@@ -246,6 +329,10 @@ __all__ = [
     "previous_result",
     "render_sync",
     "render_async",
+    "describe_sync",
+    "describe_async",
+    "describe_choices",
+    "service_available",
     "save_current",
     "save_all",
     "save_zip",

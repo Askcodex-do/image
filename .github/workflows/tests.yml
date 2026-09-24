@@ -43,3 +43,9 @@ jobs:
           python app_cli.py list
           python app_cli.py generate samples/cli_input.png --style oil_painting --style pixel_art -n 2 --max-side 300 -o samples/cli_out --zip samples/batch.zip --sheet samples/sheet.png
           python -c "import pathlib,sys; n=len(list(pathlib.Path('samples/cli_out').glob('*.png'))); print('rendered', n); sys.exit(0 if n == 4 else 1)"
+
+      - name: Check the AI mode is wired up (no network)
+        run: |
+          python app_cli.py describe --help
+          python tests/describe_offline_check.py samples/cli_input.png
+

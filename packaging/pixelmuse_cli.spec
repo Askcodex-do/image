@@ -21,10 +21,20 @@ HIDDEN_IMPORTS = [
     "pixelmuse.catalog_paint",
     "pixelmuse.cli",
     "pixelmuse.effects.core",
+    "pixelmuse.style_prompts",
+    "pixelmuse.textguide",
     "PIL.Image",
     "PIL.ImageFilter",
     "PIL.ImageOps",
     "numpy",
+    # Text-guided mode talks to an HTTPS service; PyInstaller sometimes misses
+    # these because they are pulled in indirectly by urllib.
+    "ssl",
+    "urllib.request",
+    "urllib.error",
+    "urllib.parse",
+    "http.client",
+    "email",
 ]
 
 a = Analysis(

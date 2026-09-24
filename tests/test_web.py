@@ -136,3 +136,166 @@ def test_option_parsing_clamps_values():
     assert options.strength == 0.0
     assert variants == 16
     assert max_side == 320
+
+
+# ---------------------------------------------------------------------------
+# Text-guided mode ("describe a change")
+# ---------------------------------------------------------------------------
+
+
+def test_index_offers_the_describe_mode(client):
+    body = client.get("/").data.decode("utf-8")
+    assert 'value="describe"' in body
+    assert 'name="description"' in body
+    assert 'name="tstyle"' in body
+    assert 'name="count"' in body
+
+
+def test_describe_requires_a_description(client):
+    response = client.post(
+        "/api/describe",
+        data={"file": upload(), "description": "   "},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+
+
+def test_describe_requires_an_image(client):
+    response = client.post(
+        "/api/describe",
+        data={"description": "add a crown"},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+
+
+def test_describe_rejects_bad_numbers(client):
+    response = client.post(
+        "/api/describe",
+        data={"file": upload(), "description": "add a crown", "count": "lots"},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+
+
+def test_describe_clamps_the_count(client, monkeypatch):
+    """The form caps at 16; the server must not trust it blindly."""
+    from pixelmuse import textguide
+
+    captured = {}
+
+    def fake_batch(settings, source, progress=None):
+        captured["count"] = settings.count
+        captured["side"] = settings.output_side
+        captured["description"] = settings.description
+        captured["style_prompt"] = settings.style_prompt
+        return [textguide.RenderedImage(
+            image=synthetic_photo(48, 48), style_key=settings.style_key,
+            style_label=settings.style_label, variant=0, seed=1,
+            width=48, height=48, seconds=0.1,
+        )], []
+
+    monkeypatch.setattr(textguide, "generate_batch", fake_batch)
+    response = client.post(
+        "/api/describe",
+        data={
+            "file": upload(),
+            "description": "make this an old princess in a black dress and a crown",
+            "tstyle": "oil_realism",
+            "count": "999",
+            "output_side": "99999",
+        },
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+    assert captured["count"] == 16
+    assert captured["side"] == 1024
+    assert "old princess" in captured["description"]
+    assert captured["style_prompt"]
+
+
+def test_describe_returns_images_and_a_zip(client, monkeypatch):
+    from pixelmuse import textguide
+
+    def fake_batch(settings, source, progress=None):
+        made = [
+            textguide.RenderedImage(
+                image=synthetic_photo(48, 48), style_key=settings.style_key,
+                style_label=settings.style_label, variant=index, seed=index,
+                width=48, height=48, seconds=0.1,
+            )
+            for index in range(3)
+        ]
+        return made, []
+
+    monkeypatch.setattr(textguide, "generate_batch", fake_batch)
+    response = client.post(
+        "/api/describe",
+        data={"file": upload(), "description": "add a crown", "tstyle": "noir", "count": "3"},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert len(payload["images"]) == 3
+    assert payload["warnings"] == []
+    assert payload["images"][0]["data_uri"].startswith("data:image/")
+
+    zip_response = client.get(f"/api/batch/{payload['batch_id']}.zip")
+    assert zip_response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(zip_response.data)) as archive:
+        assert len(archive.namelist()) == 3
+
+
+def test_describe_reports_partial_failures(client, monkeypatch):
+    from pixelmuse import textguide
+
+    def fake_batch(settings, source, progress=None):
+        return [textguide.RenderedImage(
+            image=synthetic_photo(48, 48), style_key=settings.style_key,
+            style_label=settings.style_label, variant=0, seed=1,
+            width=48, height=48, seconds=0.1,
+        )], ["image 2 failed: service busy"]
+
+    monkeypatch.setattr(textguide, "generate_batch", fake_batch)
+    response = client.post(
+        "/api/describe",
+        data={"file": upload(), "description": "add a crown", "tstyle": "noir", "count": "2"},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert len(payload["images"]) == 1
+    assert payload["warnings"] == ["image 2 failed: service busy"]
+
+
+def test_describe_reports_total_failure_as_502(client, monkeypatch):
+    from pixelmuse import textguide
+
+    monkeypatch.setattr(
+        textguide, "generate_batch",
+        lambda settings, source, progress=None: ([], ["image 1 failed: network unavailable"]),
+    )
+    response = client.post(
+        "/api/describe",
+        data={"file": upload(), "description": "add a crown", "tstyle": "noir", "count": "1"},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 502
+    assert b"internet" in response.data
+
+
+def test_rejected_upload_is_reported(client, monkeypatch):
+    from pixelmuse import textguide
+
+    def fake_batch(settings, source, progress=None):
+        raise AssertionError("generation should not start for a bad image")
+
+    monkeypatch.setattr(textguide, "generate_batch", fake_batch)
+    response = client.post(
+        "/api/describe",
+        data={"file": (io.BytesIO(b"this is not an image"), "broken.png"),
+              "description": "add a crown"},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+

@@ -181,6 +181,67 @@ class PixelMuseApp:
         self.file_label.grid(row=row, column=0, sticky="w", pady=(2, PAD))
         row += 1
 
+        # --- mode switch: offline filters vs. text-guided changes ------
+        self.mode_var = tk.StringVar(value="styles")
+        modes = ttk.LabelFrame(frame, text="Mode", padding=(PAD, 4))
+        modes.grid(row=row, column=0, sticky="ew")
+        row += 1
+        ttk.Radiobutton(
+            modes, text="Style filters (offline, fast)",
+            variable=self.mode_var, value="styles", command=self._on_mode_changed,
+        ).pack(anchor="w")
+        ttk.Radiobutton(
+            modes, text="Describe a change (uses internet)",
+            variable=self.mode_var, value="describe", command=self._on_mode_changed,
+        ).pack(anchor="w")
+
+        # --- text-guided controls, hidden until that mode is picked ----
+        self.describe_frame = ttk.LabelFrame(frame, text="Describe", padding=(PAD, 4))
+        self.describe_frame.grid(row=row, column=0, sticky="ew", pady=(PAD, 0))
+        row += 1
+        self.describe_frame.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            self.describe_frame,
+            text="What should change?",
+            wraplength=250, justify="left",
+        ).grid(row=0, column=0, sticky="w")
+        self.description_text = tk.Text(self.describe_frame, height=4, width=28, wrap="word")
+        self.description_text.grid(row=1, column=0, sticky="ew", pady=(2, 6))
+
+        ttk.Label(self.describe_frame, text="Look").grid(row=2, column=0, sticky="w")
+        look_keys = [key for key, _ in session.describe_choices()]
+        self.look_var = tk.StringVar(value="oil_realism")
+        ttk.Combobox(
+            self.describe_frame, textvariable=self.look_var, state="readonly",
+            values=look_keys,
+        ).grid(row=3, column=0, sticky="ew")
+
+        ttk.Label(self.describe_frame, text="Number of images").grid(
+            row=4, column=0, sticky="w", pady=(6, 0)
+        )
+        self.describe_count_var = tk.IntVar(value=session.AppState().describe_count)
+        ttk.Spinbox(
+            self.describe_frame, from_=1, to=16, textvariable=self.describe_count_var, width=8
+        ).grid(row=5, column=0, sticky="ew")
+
+        ttk.Label(self.describe_frame, text="Output size").grid(
+            row=6, column=0, sticky="w", pady=(6, 0)
+        )
+        self.describe_side_var = tk.StringVar(value="512 px")
+        ttk.Combobox(
+            self.describe_frame, textvariable=self.describe_side_var, state="readonly",
+            values=["512 px", "640 px", "768 px"],
+        ).grid(row=7, column=0, sticky="ew")
+
+        ttk.Label(
+            self.describe_frame,
+            text="Roughly 5-60 s per image. Busy moments are retried automatically.",
+            wraplength=250, justify="left", foreground="#555555", font=("Segoe UI", 8),
+        ).grid(row=8, column=0, sticky="w", pady=(6, 0))
+
+        self.describe_frame.grid_remove()
+
         self.variants_var = tk.IntVar(value=session.AppState().variants)
         self.detail_var = tk.DoubleVar(value=0.5)
         self.strength_var = tk.DoubleVar(value=0.75)
@@ -191,15 +252,30 @@ class PixelMuseApp:
         self.frame_var = tk.BooleanVar(value=False)
         self.seed_var = tk.StringVar(value="")
 
-        row = self._spin(frame, row, "Images per style", self.variants_var, 1, 16)
-        row = self._scale(frame, row, "Detail (loose -> fine)", self.detail_var, 0.0, 1.0)
-        row = self._scale(frame, row, "Effect strength", self.strength_var, 0.0, 1.0)
-        row = self._spin(frame, row, "Colour levels hint", self.colors_var, 3, 48)
-
-        ttk.Label(frame, text="Working size").grid(row=row, column=0, sticky="w", pady=(PAD, 0))
+        # Knobs that only mean something to the offline renderers.  Hidden in
+        # describe mode, where the model decides those details instead.
+        self.offline_frame = ttk.Frame(frame)
+        self.offline_frame.grid(row=row, column=0, sticky="ew")
+        self.offline_frame.columnconfigure(0, weight=1)
+        self.offline_frame.rowconfigure(0, weight=1)
         row += 1
+
+        offline_inner = ttk.Frame(self.offline_frame)
+        offline_inner.grid(row=0, column=0, sticky="ew")
+        offline_inner.columnconfigure(0, weight=1)
+
+        inner_row = 0
+        inner_row = self._spin(offline_inner, inner_row, "Images per style", self.variants_var, 1, 16)
+        inner_row = self._scale(offline_inner, inner_row, "Detail (loose -> fine)", self.detail_var, 0.0, 1.0)
+        inner_row = self._scale(offline_inner, inner_row, "Effect strength", self.strength_var, 0.0, 1.0)
+        inner_row = self._spin(offline_inner, inner_row, "Colour levels hint", self.colors_var, 3, 48)
+
+        ttk.Label(offline_inner, text="Working size").grid(
+            row=inner_row, column=0, sticky="w", pady=(PAD, 0)
+        )
+        inner_row += 1
         size_box = ttk.Combobox(
-            frame,
+            offline_inner,
             textvariable=self.size_var,
             state="readonly",
             values=[
@@ -209,21 +285,20 @@ class PixelMuseApp:
                 "Large (1800 px, ~480 MB)",
             ],
         )
-        size_box.grid(row=row, column=0, sticky="ew")
-        row += 1
+        size_box.grid(row=inner_row, column=0, sticky="ew")
+        inner_row += 1
 
-        ttk.Checkbutton(frame, text="Canvas / paper texture", variable=self.texture_var).grid(
-            row=row, column=0, sticky="w", pady=(PAD, 0)
+        ttk.Checkbutton(offline_inner, text="Canvas / paper texture", variable=self.texture_var).grid(
+            row=inner_row, column=0, sticky="w", pady=(PAD, 0)
         )
-        row += 1
-        ttk.Checkbutton(frame, text="Vignette", variable=self.vignette_var).grid(
-            row=row, column=0, sticky="w"
+        inner_row += 1
+        ttk.Checkbutton(offline_inner, text="Vignette", variable=self.vignette_var).grid(
+            row=inner_row, column=0, sticky="w"
         )
-        row += 1
-        ttk.Checkbutton(frame, text="Print border", variable=self.frame_var).grid(
-            row=row, column=0, sticky="w"
+        inner_row += 1
+        ttk.Checkbutton(offline_inner, text="Print border", variable=self.frame_var).grid(
+            row=inner_row, column=0, sticky="w"
         )
-        row += 1
 
         ttk.Label(frame, text="Seed (blank = random)").grid(row=row, column=0, sticky="w", pady=(PAD, 0))
         row += 1
@@ -406,23 +481,76 @@ class PixelMuseApp:
         )
         return True
 
+    def _on_mode_changed(self) -> None:
+        """Swap the visible controls and relabel the button for the mode."""
+        describe = self.mode_var.get() == "describe"
+        if describe:
+            self.describe_frame.grid()
+            self.offline_frame.grid_remove()
+        else:
+            self.describe_frame.grid_remove()
+            self.offline_frame.grid()
+        self.render_button.configure(
+            text="Create from description" if describe else "Generate images"
+        )
+        self._refresh_status()
+
+    def _collect_describe(self) -> bool:
+        """Read the text-guided controls into the shared state."""
+        text = self.description_text.get("1.0", "end").strip()
+        if not text:
+            messagebox.showinfo(APP_NAME, "Describe what should change first.")
+            return False
+        if not self.state.has_source:
+            messagebox.showinfo(APP_NAME, "Open an image first.")
+            return False
+        try:
+            count = int(self.describe_count_var.get())
+        except (tk.TclError, ValueError):
+            count = session.AppState().describe_count
+        side = int(self.describe_side_var.get().split()[0])
+
+        self.state.mode = "describe"
+        self.state.description = text
+        self.state.describe_style = self.look_var.get() or "oil_realism"
+        self.state.describe_count = max(1, min(16, count))
+        self.state.describe_side = max(256, min(1024, side))
+        self.state.seed = self._parse_seed()
+        return True
+
+    def _parse_seed(self) -> Optional[int]:
+        raw = self.seed_var.get().strip()
+        if not raw:
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
     def _generate(self) -> None:
         if self._rendering:
             return
         self.state.selected = [key for key, var in self.style_vars.items() if var.get()]
-        if not self.state.has_source:
-            messagebox.showinfo(APP_NAME, "Open an image first.")
-            return
-        if not self.state.selected:
-            messagebox.showinfo(APP_NAME, "Choose at least one style.")
-            return
-        if not self._collect_options():
-            return
+
+        describing = self.mode_var.get() == "describe"
+        if describing:
+            if not self._collect_describe():
+                return
+        else:
+            if not self.state.has_source:
+                messagebox.showinfo(APP_NAME, "Open an image first.")
+                return
+            if not self.state.selected:
+                messagebox.showinfo(APP_NAME, "Choose at least one style.")
+                return
+            if not self._collect_options():
+                return
 
         self._set_busy(True)
         self.progress.configure(value=0)
         self.state.results = []
         self.state.result_index = 0
+        self.state.warnings = []
 
         def on_progress(message: str, fraction: float) -> None:
             self._events.put(("progress", message, fraction))
@@ -430,7 +558,10 @@ class PixelMuseApp:
         def on_done(images: List[RenderedImage], error: Optional[BaseException]) -> None:
             self._events.put(("done", images, error))
 
-        session.render_async(self.state, progress=on_progress, done=on_done)
+        if describing:
+            session.describe_async(self.state, progress=on_progress, done=on_done)
+        else:
+            session.render_async(self.state, progress=on_progress, done=on_done)
 
     def _show_next(self) -> None:
         session.next_result(self.state)
@@ -559,8 +690,11 @@ class PixelMuseApp:
                         messagebox.showerror(APP_NAME, f"Rendering failed:\n\n{error}")
                     else:
                         self.progress.configure(value=100)
+                        note = ""
+                        if self.state.warnings:
+                            note = f" ({len(self.state.warnings)} image(s) did not come back)"
                         self.status.configure(
-                            text=f"Generated {len(images)} image(s). "
+                            text=f"Generated {len(images)} image(s).{note} "
                                  f"{session.summary(self.state)}"
                         )
                         self._show_current()

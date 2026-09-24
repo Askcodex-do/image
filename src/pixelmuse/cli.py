@@ -22,6 +22,7 @@ from .generator import (
     render_many,
     styles_by_family,
 )
+from . import style_prompts, textguide
 from .styles import RenderOptions
 
 
@@ -34,6 +35,22 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("list", help="list every available style")
+
+    desc = sub.add_parser("describe", help="change an image from a text description (needs internet)")
+    desc.add_argument("source", help="path to the input image")
+    desc.add_argument("-d", "--description", required=True,
+                      help="what should change, e.g. 'make this an old princess in a black dress wearing a crown'")
+    desc.add_argument("-t", "--look", default="oil_realism",
+                      help="style the result is rendered in (default oil_realism)")
+    desc.add_argument("-n", "--count", type=int, default=DEFAULT_VARIANTS,
+                      help=f"number of images to create (default {DEFAULT_VARIANTS})")
+    desc.add_argument("-o", "--out", default="outputs", help="output directory")
+    desc.add_argument("--side", type=int, default=512, help="output size in pixels (512/640/768)")
+    desc.add_argument("--seed", type=int, default=None, help="reproducible randomness")
+    desc.add_argument("--format", default=".png", choices=[".png", ".jpg", ".webp", ".bmp"])
+    desc.add_argument("--zip", dest="zip_path", default=None, help="also write a zip of the batch")
+    desc.add_argument("--sheet", dest="sheet_path", default=None, help="also write a contact sheet PNG")
+    desc.add_argument("--pdf", dest="pdf_path", default=None, help="also write a multi-page PDF")
 
     gen = sub.add_parser("generate", help="turn one image into styled images")
     gen.add_argument("source", help="path to the input image")
@@ -145,6 +162,71 @@ def cmd_generate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_describe(args: argparse.Namespace) -> int:
+    """Text-guided mode: the description changes the picture."""
+    try:
+        source = imgio.load_image(args.source)
+    except imgio.ImageLoadError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    look = args.look
+    if style_prompts.prompt_for(look) == "" and not style_prompts.STYLE_PROMPTS.get(look):
+        known = ", ".join(key for key, _ in style_prompts.style_choices())
+        print(f"error: unknown look '{look}'. Choose from: {known}", file=sys.stderr)
+        return 1
+
+    settings = textguide.BatchSettings(
+        style_key=look,
+        style_label=style_prompts.label_for(look),
+        style_prompt=style_prompts.prompt_for(look),
+        description=args.description,
+        count=max(1, args.count),
+        output_side=max(256, min(1024, args.side)),
+        seed=args.seed,
+    )
+
+    def progress(message: str, fraction: float) -> None:
+        print(f"  [{fraction * 100:5.1f}%] {message}", flush=True)
+
+    print(f"Creating {settings.count} image(s) as {settings.style_label}")
+    print(f"  description: {settings.description}")
+    results, warnings = textguide.generate_batch(settings, source, progress=progress)
+
+    if not results:
+        print("error: could not reach the image service.", file=sys.stderr)
+        for warning in warnings[:3]:
+            print(f"  {warning}", file=sys.stderr)
+        print("Check your internet connection and try again.", file=sys.stderr)
+        return 1
+
+    out_dir = Path(args.out)
+    written = export.save_batch(results, out_dir, format_ext=args.format)
+    print(f"Wrote {len(written)} file(s) to {out_dir.resolve()}")
+
+    if args.zip_path:
+        payload = export.batch_to_zip_bytes(results, format_ext=args.format)
+        target = Path(args.zip_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+        print(f"Wrote {target} ({len(payload) / 1024:.0f} KiB)")
+
+    if args.sheet_path:
+        sheet = build_contact_sheet(results, columns=min(4, max(1, len(results))))
+        print(f"Wrote {imgio.save_image(sheet, args.sheet_path)}")
+
+    if args.pdf_path:
+        payload = export.batch_to_pdf_bytes(results)
+        target = Path(args.pdf_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+        print(f"Wrote {target} ({len(payload) / 1024:.0f} KiB)")
+
+    for warning in warnings:
+        print(f"note: {warning}", file=sys.stderr)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -152,6 +234,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_list()
     if args.command == "generate":
         return cmd_generate(args)
+    if args.command == "describe":
+        return cmd_describe(args)
     parser.error(f"unknown command {args.command}")
     return 2
 
