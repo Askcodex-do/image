@@ -1,0 +1,5 @@
+# Core runtime requirements. No upper pin on Pillow: pip picks the newest
+# release that supports the interpreter in use, which keeps Python 3.10
+# working while allowing newer wheels on newer Pythons.
+Pillow>=9.5
+numpy>=1.21,<3
