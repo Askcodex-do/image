@@ -104,12 +104,28 @@ sprite resolutions, line weights, paper tones and grid pitches.
 2. Download the `PixelMuse-windows-exe` artifact and unzip it.
 3. Double-click **`PixelMuse.exe`**. That is the whole installation.
 
-Tagged releases (`v1.0.0` and later) also appear on the **Releases** page with
+Tagged releases (`v1.1.0` and later) also appear on the **Releases** page with
 the EXE attached, which is the simplest place to grab it from.
 
 Windows SmartScreen may warn about an unsigned executable from the internet.
 Choose *More info* then *Run anyway*. You can also build it yourself from
 source, which is exactly what CI does.
+
+> **A note about Windows 8.1.** The EXE is built on a modern Windows runner and
+> has not been tested on 8.1. The Python code targets 3.10.11 and the offline
+> engine uses nothing newer than Pillow and NumPy, so it should run - but
+> Windows 8.1 is past end of life, and a wheel built for a newer Windows can
+> refuse to load on it. If `PixelMuse.exe` will not start, first try **Option
+> 2** from source with Python 3.10.11, and if pip tries to install a NumPy 2.x
+> that will not import, pin the older build:
+>
+> ```bat
+> pip install "numpy<2" Pillow
+> ```
+>
+> NumPy 1.x explicitly supported Windows 8 and 8.1; the 2.x line moved its
+> baseline forward. Everything here also works on NumPy 1.21+, so the pin is
+> safe.
 
 ### Option 2 - run from source
 
@@ -303,9 +319,12 @@ Push a tag and GitHub Actions builds and smoke-tests the EXE, then attaches it
 to a release:
 
 ```bat
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.1.0
+git push origin v1.1.0
 ```
+
+Releases are named after the tag, so `v1.1.0` publishes `PixelMuse 1.1.0`.
+Update `__version__` in `src/pixelmuse/__init__.py` to match before tagging.
 
 ## Licence
 
