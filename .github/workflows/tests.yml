@@ -41,5 +41,5 @@ jobs:
         run: |
           python tests/make_sample.py samples/cli_input.png 400 300
           python app_cli.py list
-          python app_cli.py generate samples/cli_input.png --style oil_painting --style pixel_art -n 2 --max-side 300 -o samples/cli_out --zip samples/cli_out/batch.zip --sheet samples/cli_out/sheet.png
-          python -c "import pathlib,sys; p=pathlib.Path('samples/cli_out'); n=len(list(p.glob('*.png'))); print('rendered', n); sys.exit(0 if n == 4 else 1)"
+          python app_cli.py generate samples/cli_input.png --style oil_painting --style pixel_art -n 2 --max-side 300 -o samples/cli_out --zip samples/batch.zip --sheet samples/sheet.png
+          python -c "import pathlib,sys; n=len(list(pathlib.Path('samples/cli_out').glob('*.png'))); print('rendered', n); sys.exit(0 if n == 4 else 1)"
