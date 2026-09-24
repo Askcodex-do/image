@@ -1,0 +1,45 @@
+name: tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: pytest (${{ matrix.os }} / py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        # The target machine runs Python 3.10.11 / Windows 8.1, so 3.10 is
+        # the compatibility floor we must keep green.
+        python: ["3.10", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-web.txt pytest
+
+      - name: Run the test suite
+        run: python -m pytest tests -q
+
+      - name: Check the CLI works from source
+        run: |
+          python tests/make_sample.py samples/cli_input.png 400 300
+          python app_cli.py list
+          python app_cli.py generate samples/cli_input.png --style oil_painting --style pixel_art -n 2 --max-side 300 -o samples/cli_out --zip samples/batch.zip --sheet samples/sheet.png
+          python -c "import pathlib,sys; n=len(list(pathlib.Path('samples/cli_out').glob('*.png'))); print('rendered', n); sys.exit(0 if n == 4 else 1)"
