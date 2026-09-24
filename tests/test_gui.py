@@ -202,7 +202,8 @@ def test_generate_routes_to_offline_renderer(app, tmp_path, monkeypatch):
     source = tmp_path / "photo.png"
     synthetic_photo(200, 150).save(source)
     session.load_source(app.state, source)
-    session.select_styles(app.state, ["noir"])
+    # _generate rebuilds the selection from the checkboxes, so tick one.
+    app.style_vars["noir"].set(True)
 
     called = {}
 
