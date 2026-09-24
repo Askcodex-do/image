@@ -110,12 +110,24 @@ jobs:
           body: |
             ## PixelMuse ${{ github.ref_name }}
 
-            Offline AI image generator for Windows. Download `PixelMuse.exe`,
-            double-click it, and start creating - no installation, no Python,
-            no internet connection required.
+            Turn your photos into paintings on a 2 GB Windows machine. Download
+            `PixelMuse.exe`, double-click it, and start creating - no
+            installation, no Python. The 19 offline styles need no internet at
+            all.
 
-            * `PixelMuse.exe` - the desktop app (19 styles across painting and drawing families)
+            * `PixelMuse.exe` - the desktop app (19 offline styles, plus an
+              opt-in *Describe a change* mode that needs internet)
             * `PixelMuse-CLI.exe` - optional command line version for batch work
+
+            ### Two ways to create
+
+            1. **Style filters** - offline, ~1 second per image. Pick from 19
+               painting and drawing styles and save the ones you like.
+            2. **Describe a change** - needs internet, ~5-60 s per image. Upload
+               a photo, pick a look, type what should change (for example
+               "make this an old princess wearing a black dress and a crown"),
+               choose up to 16 images, and download the ones you want. No
+               account or API key required.
 
             These executables were built and smoke-tested on a clean
             `windows-latest` runner by GitHub Actions.

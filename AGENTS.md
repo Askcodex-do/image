@@ -5,38 +5,60 @@ short; it is loaded automatically for every conversation.
 
 ## What this project is
 
-PixelMuse: an **offline** image styliser. One input image becomes many styled
-images across a multiple-choice list of descriptions (oil painting, pencil
-sketch, pixel art, ...). Ships as a single-file Windows EXE.
+PixelMuse: an image styliser with **two modes**. One input image becomes many
+images either way.
+
+1. **Style filters** (default, offline) - a multiple-choice list of looks (oil
+   painting, pencil sketch, pixel art, ...), applied with real image processing.
+2. **Describe a change** (opt-in, needs internet) - sends the photo plus a text
+   instruction to a public image service and returns up to 16 variants.
+
+Ships as a single-file Windows EXE.
 
 ## Hard constraints (do not violate)
 
 * **Target machine: Windows 8.1, 2 GB RAM, Python 3.10.11.** This is the
   compatibility floor. Windows 8.1 means Python 3.10 is the newest usable
   interpreter; keep CI green on 3.10.
-* **RAM budget.** Peak allocation for a default batch must stay under ~300 MB.
-  Never build an unbounded list of full-size float arrays. Downscale to a
-  working canvas first (see `generator.prepare_working_image`), render variants
-  one at a time, and let callers drop results.
-* **Offline by default.** No model downloads, no network calls, no telemetry in
-  the desktop path. The only optional network-facing component is the local
-  Flask page bound to `127.0.0.1`; it must never bind a public interface by
-  default and must never upload anything anywhere.
+* **RAM budget.** Peak allocation for a default offline batch must stay under
+  ~300 MB. Never build an unbounded list of full-size float arrays. Downscale
+  to a working canvas first (see `generator.prepare_working_image`), render
+  variants one at a time, and let callers drop results. The AI mode keeps *one*
+  image in flight at a time for the same reason.
+* **Offline by default.** The desktop path must work with no network. The only
+  network-facing components are:
+  * the local Flask page, bound to `127.0.0.1`; it must never bind a public
+    interface by default;
+  * `textguide.py`, the AI mode, which contacts a public image service **only
+    when the user explicitly picks that mode** and sends the image. It must
+    never be called as a side effect of anything else, and no telemetry or
+    analytics may ever be added.
+  The default mode stays offline and the AI mode is always labelled in the UI as
+  needing internet, so the user is never surprised by an upload.
 * **No heavy dependencies.** Runtime is Pillow + NumPy only (Flask is an
   optional extra documented in `requirements-web.txt`). Do not add SciPy,
   OpenCV, torch, matplotlib, etc. The PyInstaller specs actively exclude them.
+  The AI mode is deliberately implemented on `urllib` from the standard library
+  rather than pulling in `requests`.
 * **No binary fixtures.** Test images are generated procedurally in
   `tests/fixtures.py` so the repository stays text-only and reproducible.
 
 ## Commands
 
 ```bash
-python -m pytest tests -q                      # full suite (84 tests)
+python -m pytest tests -q                      # full suite (127 tests)
 python tests/make_sample.py /tmp/in.png 800 600  # synthetic input image
 python app_cli.py list                         # style catalogue
 python app_cli.py generate /tmp/in.png --style all -n 1 -o /tmp/out
+python app_cli.py describe /tmp/in.png -d "add a gold crown" -n 4   # needs internet
 python app_gui.py                              # desktop app (needs Tkinter)
 python app_web.py                              # local browser mode (needs Flask)
+
+# end-to-end AI-mode check with no network (used by CI)
+python tests/describe_offline_check.py /tmp/in.png
+
+# live AI mode against the real service (opt-in)
+PIXELMUSE_LIVE_TEST=1 python -m pytest tests/test_textguide.py -q
 
 # build + verify the EXE the way CI does
 PIXELMUSE_ONEFILE=1 python -m PyInstaller --clean --noconfirm packaging/pixelmuse_cli.spec
@@ -61,6 +83,29 @@ because CI runners have no Tkinter.
 Array convention: `numpy.float32` in 0..1, shape `(H, W, 3)`. Helpers in
 `effects/core.py`. `core.luminance` and `core.to_image` accept `(H, W)` and
 `(H, W, 1)` as well as `(H, W, 3)`; `core.blend` accepts an array alpha.
+
+### AI mode
+
+`textguide.py` does the talking; `style_prompts.py` maps a style key onto a
+prompt phrase (and a human label). `session.describe_sync` / `describe_async`
+are the shared entry points, so `gui.py`, `web.py` and `cli.py` all go through
+the same code - keep it that way.
+
+Three things in `textguide.py` are load-bearing and easy to break:
+
+* **The URL is the payload.** The reference photo is downscaled to <=384 px and
+  base64-encoded into the query string. The service rejects request lines over
+  roughly 16 KB with HTTP 431, and `MAX_URL_CHARS` is checked against the real
+  limit. If you raise `ref_side`, verify the encoded URI still fits - there is a
+  test with random noise, which compresses worst.
+* **Retries are the normal case, not an error path.** The service is free and
+  shared, so transient 5xx and non-image bodies are expected. `_Retryable`
+  triggers a retry with a grown pause and a varied seed; `_Permanent` (a 4xx,
+  i.e. a bad request) must *not* be retried. A 200 carrying HTML or JSON is
+  treated as retryable, because that is what a glitch looks like.
+* **Partial batches are a success.** `generate_batch` returns
+  `(results, warnings)` and never raises for individual failures. Callers show
+  the images that arrived plus a note. Only a total failure is an error.
 
 ## Style gotchas
 
@@ -88,15 +133,23 @@ suite - it takes about four seconds.
 
 `tests/exe_smoke.py` is not part of pytest. It runs a **built** executable and
 is what CI uses to prove an artifact works before it is published. If you change
-the CLI surface, update it.
+the CLI surface, update it. It now also checks that the AI mode is bundled, by
+running `describe --help` and confirming a bad look is rejected - that stays
+hermetic, because CI must not depend on the network.
+
+AI-mode tests never touch the real service by default. `test_textguide.py`
+starts a local stand-in HTTP server so retry, partial-failure and
+total-failure paths can be scripted deterministically. The one live test is
+skipped unless `PIXELMUSE_LIVE_TEST` is set.
 
 ## CI
 
 `tests.yml` runs pytest on Ubuntu and Windows across Python 3.10-3.12, plus a
-from-source CLI check. `build-windows-exe.yml` builds the console EXE
-(`PIXELMUSE_ONEFILE=1`, smoke-tested) and the windowed GUI EXE on
-`windows-latest`, uploads both as artifacts, and attaches them to a GitHub
-Release when a `v*` tag is pushed.
+from-source CLI check and `tests/describe_offline_check.py`, which drives the
+whole AI mode against a local stand-in so CI stays hermetic. `build-windows-exe.yml`
+builds the console EXE (`PIXELMUSE_ONEFILE=1`, smoke-tested) and the windowed
+GUI EXE on `windows-latest`, uploads both as artifacts, and attaches them to a
+GitHub Release when a `v*` tag is pushed.
 
 The GUI EXE cannot be scripted, so CI verifies it exists, is not suspiciously
 small, and then runs the packaged console EXE to prove the shared modules were

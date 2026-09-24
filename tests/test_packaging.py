@@ -90,3 +90,107 @@ def test_version_is_exposed():
 
     assert pixelmuse.__version__.count(".") == 2
     assert pixelmuse.APP_NAME == "PixelMuse"
+
+
+# ---------------------------------------------------------------------------
+# Text-guided CLI
+# ---------------------------------------------------------------------------
+
+
+def test_cli_describe_parser_accepts_documented_invocations():
+    from pixelmuse.cli import _build_parser
+
+    parser = _build_parser()
+    args = parser.parse_args([
+        "describe", "photo.png",
+        "-d", "make this an old princess in a black dress and a crown",
+        "-t", "oil_realism", "-n", "16", "--side", "640",
+    ])
+    assert args.command == "describe"
+    assert args.description.startswith("make this an old princess")
+    assert args.look == "oil_realism"
+    assert args.count == 16
+    assert args.side == 640
+
+
+def test_cli_describe_needs_a_description():
+    from pixelmuse.cli import _build_parser
+
+    with pytest.raises(SystemExit):
+        _build_parser().parse_args(["describe", "photo.png"])
+
+
+def test_cli_describe_rejects_unknown_look(tmp_path, capsys):
+    from pixelmuse.cli import main
+
+    source = tmp_path / "in.png"
+    from fixtures import synthetic_photo
+
+    synthetic_photo(120, 90).save(source)
+
+    # An unknown look is caught before any network call is attempted.
+    assert main(["describe", str(source), "-d", "add a crown", "-t", "not_a_look"]) == 1
+    assert "unknown look" in capsys.readouterr().err
+
+
+def test_cli_describe_rejects_unreadable_file(tmp_path, capsys):
+    from pixelmuse.cli import main
+
+    junk = tmp_path / "notes.txt"
+    junk.write_text("not an image")
+    assert main(["describe", str(junk), "-d", "add a crown"]) == 1
+    assert capsys.readouterr().err
+
+
+def test_cli_describe_writes_files_without_network(tmp_path, monkeypatch, capsys):
+    """Exercise the whole CLI path with the service stubbed out."""
+    from pixelmuse import cli, textguide
+    from fixtures import synthetic_photo
+
+    source = tmp_path / "photo.png"
+    synthetic_photo(200, 150).save(source)
+
+    def fake_batch(settings, image, progress=None):
+        made = [
+            textguide.RenderedImage(
+                image=synthetic_photo(96, 96), style_key=settings.style_key,
+                style_label=settings.style_label, variant=index, seed=index,
+                width=96, height=96, seconds=0.2,
+            )
+            for index in range(2)
+        ]
+        return made, ["image 2 failed: service busy"]
+
+    monkeypatch.setattr(textguide, "generate_batch", fake_batch)
+
+    out = tmp_path / "results"
+    code = cli.main([
+        "describe", str(source), "-d", "add a crown and a black dress",
+        "-t", "oil_realism", "-n", "2", "-o", str(out),
+        "--zip", str(tmp_path / "b.zip"), "--sheet", str(tmp_path / "sheet.png"),
+        "--pdf", str(tmp_path / "b.pdf"),
+    ])
+    assert code == 0
+    assert len(list(out.glob("*.png"))) == 2
+    assert (tmp_path / "b.zip").exists()
+    assert (tmp_path / "sheet.png").exists()
+    assert (tmp_path / "b.pdf").exists()
+    # The partial failure is reported but does not fail the run.
+    assert "note: image 2 failed" in capsys.readouterr().err
+
+
+def test_cli_describe_reports_service_failure(tmp_path, monkeypatch, capsys):
+    from pixelmuse import cli, textguide
+    from fixtures import synthetic_photo
+
+    source = tmp_path / "photo.png"
+    synthetic_photo(160, 120).save(source)
+
+    monkeypatch.setattr(
+        textguide, "generate_batch",
+        lambda settings, image, progress=None: ([], ["image 1 failed: network unavailable"]),
+    )
+    code = cli.main(["describe", str(source), "-d", "add a crown", "-n", "1"])
+    assert code == 1
+    assert "internet" in capsys.readouterr().err
+

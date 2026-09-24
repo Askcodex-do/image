@@ -23,6 +23,7 @@ from typing import Optional
 from PIL import Image
 
 from . import APP_NAME, APP_TAGLINE, __version__, export, imgio
+from . import style_prompts, textguide
 from .generator import render_many, styles_by_family
 from .styles import RenderOptions
 
@@ -69,6 +70,15 @@ PAGE = """<!doctype html>
  a.dl { color:#9ecbff; text-decoration:none; }
  empty { color:#8b93a7; }
  #status { padding:10px 0; font-size:14px; color:#aab2c4; min-height:22px; }
+ .modes { display:grid; gap:6px; margin-top:6px; }
+ .modes label { display:flex; gap:8px; align-items:baseline; margin:0; padding:8px;
+                border-radius:8px; background:#20252e; color:#e8e8ee; cursor:pointer; }
+ .modes label:hover { background:#262c37; }
+ .modes small { color:#8b93a7; }
+ textarea { width:100%; font:inherit; padding:8px; border-radius:8px;
+            border:1px solid #2a2e36; background:#12151a; color:#e8e8ee; resize:vertical; }
+ .hint { font-size:12px; color:#8b93a7; margin:10px 0 0; }
+ .warn { color:#ffcf7a; }
 </style>
 </head>
 <body>
@@ -81,35 +91,71 @@ PAGE = """<!doctype html>
       <label for="file">1. Your image</label>
       <input type="file" id="file" name="file" accept="image/*" required>
 
-      <label>2. Styles (multiple choice)</label>
-      <div class="styles">
-        {% for family, items in families.items() %}
-          <strong>{{ family }}</strong>
-          {% for style in items %}
-            <label>
-              <input type="checkbox" name="style" value="{{ style.key }}">
-              <span>{{ style.label }}<br><small>{{ style.blurb }}</small></span>
-            </label>
-          {% endfor %}
-        {% endfor %}
+      <label>2. Mode</label>
+      <div class="modes">
+        <label><input type="radio" name="mode" value="styles" checked>
+          <span>Style filters <small>offline, instant</small></span></label>
+        <label><input type="radio" name="mode" value="describe">
+          <span>Describe a change <small>needs internet, uses AI</small></span></label>
       </div>
 
-      <label for="variants">Images per style</label>
-      <input type="number" id="variants" name="variants" value="4" min="1" max="16">
+      <div id="describe-block" hidden>
+        <label for="description">What should change?</label>
+        <textarea id="description" name="description" rows="4"
+          placeholder="e.g. make this an old princess wearing a black dress and a crown"></textarea>
 
-      <label for="detail">Detail: loose &rarr; fine</label>
-      <input type="range" id="detail" name="detail" min="0" max="1" step="0.05" value="0.5">
+        <label for="tstyle">Look</label>
+        <select id="tstyle" name="tstyle">
+          {% for key, label in prompt_styles %}
+            <option value="{{ key }}"{% if key == 'oil_realism' %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
 
-      <label for="strength">Effect strength</label>
-      <input type="range" id="strength" name="strength" min="0" max="1" step="0.05" value="0.75">
+        <label for="count">Number of images</label>
+        <input type="number" id="count" name="count" value="4" min="1" max="16">
 
-      <label for="max_side">Working size (px, lower = less RAM)</label>
-      <select id="max_side" name="max_side">
-        <option value="800">800 - Small (~120 MB)</option>
-        <option value="1100">1100 - Medium (~190 MB)</option>
-        <option value="1400" selected>1400 - Standard (~300 MB)</option>
-        <option value="1800">1800 - Large (~480 MB)</option>
-      </select>
+        <label for="output_side">Output size</label>
+        <select id="output_side" name="output_side">
+          <option value="512" selected>512 px (fastest)</option>
+          <option value="640">640 px</option>
+          <option value="768">768 px (best)</option>
+        </select>
+        <p class="hint">Each image takes roughly 5-60 seconds and is retried
+        automatically if the service is busy. Nothing is stored anywhere except
+        on this machine.</p>
+      </div>
+
+      <div id="styles-block">
+        <label>2. Styles (multiple choice)</label>
+        <div class="styles">
+          {% for family, items in families.items() %}
+            <strong>{{ family }}</strong>
+            {% for style in items %}
+              <label>
+                <input type="checkbox" name="style" value="{{ style.key }}">
+                <span>{{ style.label }}<br><small>{{ style.blurb }}</small></span>
+              </label>
+            {% endfor %}
+          {% endfor %}
+        </div>
+
+        <label for="variants">Images per style</label>
+        <input type="number" id="variants" name="variants" value="4" min="1" max="16">
+
+        <label for="detail">Detail: loose &rarr; fine</label>
+        <input type="range" id="detail" name="detail" min="0" max="1" step="0.05" value="0.5">
+
+        <label for="strength">Effect strength</label>
+        <input type="range" id="strength" name="strength" min="0" max="1" step="0.05" value="0.75">
+
+        <label for="max_side">Working size (px, lower = less RAM)</label>
+        <select id="max_side" name="max_side">
+          <option value="800">800 - Small (~120 MB)</option>
+          <option value="1100">1100 - Medium (~190 MB)</option>
+          <option value="1400" selected>1400 - Standard (~300 MB)</option>
+          <option value="1800">1800 - Large (~480 MB)</option>
+        </select>
+      </div>
 
       <button type="submit" id="go">Generate images</button>
     </form>
@@ -129,24 +175,57 @@ const go = document.getElementById('go');
 const zipLink = document.getElementById('zip');
 let batchId = null;
 
+// Show only the controls that belong to the chosen mode.
+const describeBlock = document.getElementById('describe-block');
+const stylesBlock = document.getElementById('styles-block');
+function syncMode() {
+  const mode = form.querySelector('input[name=mode]:checked').value;
+  describeBlock.hidden = mode !== 'describe';
+  stylesBlock.hidden = mode !== 'styles';
+}
+for (const radio of form.querySelectorAll('input[name=mode]')) {
+  radio.addEventListener('change', syncMode);
+}
+syncMode();
+
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   const data = new FormData(form);
-  if (!data.getAll('style').length) { status.textContent = 'Pick at least one style.'; return; }
+  const mode = data.get('mode') || 'styles';
+  if (mode === 'styles' && !data.getAll('style').length) {
+    status.textContent = 'Pick at least one style.'; return;
+  }
+  if (mode === 'describe' && !(data.get('description') || '').trim()) {
+    status.textContent = 'Describe what should change.'; return;
+  }
   go.disabled = true;
-  status.textContent = 'Rendering... this happens on your machine.';
+  status.textContent = mode === 'describe'
+    ? 'Creating images from your description... each one takes a few seconds.'
+    : 'Rendering... this happens on your machine.';
   grid.innerHTML = '';
   zipLink.style.display = 'none';
   try {
-    const response = await fetch('/api/generate', { method: 'POST', body: data });
+    const response = await fetch(
+      mode === 'describe' ? '/api/describe' : '/api/generate',
+      { method: 'POST', body: data });
     if (!response.ok) {
       const detail = await response.text();
       throw new Error(detail || ('HTTP ' + response.status));
     }
     const payload = await response.json();
     batchId = payload.batch_id;
-    status.textContent = 'Done: ' + payload.images.length + ' image(s) in '
+    let message = 'Done: ' + payload.images.length + ' image(s) in '
       + payload.seconds.toFixed(1) + 's.';
+    if (payload.warnings && payload.warnings.length) {
+      message += ' ' + payload.warnings.length + ' image(s) did not come back.';
+    }
+    status.textContent = message;
+    if (payload.warnings && payload.warnings.length) {
+      const note = document.createElement('div');
+      note.className = 'warn';
+      note.textContent = payload.warnings.join(' | ');
+      status.appendChild(note);
+    }
     for (const item of payload.images) {
       const figure = document.createElement('figure');
       figure.innerHTML = '<img alt="' + item.label + '" src="' + item.data_uri + '">'
@@ -154,8 +233,10 @@ form.addEventListener('submit', async (event) => {
         + '<a class="dl" download="' + item.filename + '" href="' + item.data_uri + '">save</a></figcaption>';
       grid.appendChild(figure);
     }
-    zipLink.href = '/api/batch/' + batchId + '.zip';
-    zipLink.style.display = 'inline';
+    if (payload.images.length) {
+      zipLink.href = '/api/batch/' + batchId + '.zip';
+      zipLink.style.display = 'inline';
+    }
   } catch (error) {
     status.textContent = 'Failed: ' + error.message;
   } finally {
@@ -233,6 +314,7 @@ def create_app() -> "Flask":
             tagline=APP_TAGLINE,
             version=__version__,
             families=styles_by_family(),
+            prompt_styles=[(key, style_prompts.label_for(key)) for key, _ in style_prompts.style_choices()],
         )
 
     @app.post("/api/generate")
@@ -275,6 +357,86 @@ def create_app() -> "Flask":
         return jsonify(
             batch_id=batch_id,
             seconds=elapsed,
+            images=[
+                {
+                    "label": item.style_label,
+                    "style": item.style_key,
+                    "variant": item.variant,
+                    "filename": item.suggested_filename(),
+                    "width": item.width,
+                    "height": item.height,
+                    "data_uri": _data_uri(item.image),
+                }
+                for item in results
+            ],
+        )
+
+    @app.post("/api/describe")
+    def describe():
+        """Text-guided mode: the description changes the picture."""
+        upload = request.files.get("file")
+        if upload is None or not upload.filename:
+            return "No image was uploaded.", 400
+
+        description = (request.form.get("description") or "").strip()
+        if not description:
+            return "Describe what should change.", 400
+
+        style_key = (request.form.get("tstyle") or "").strip()
+
+        def number(name: str, low: int, high: int, fallback: int) -> int:
+            raw = request.form.get(name)
+            if raw is None or raw == "":
+                return fallback
+            try:
+                return min(high, max(low, int(float(raw))))
+            except (TypeError, ValueError):
+                raise ValueError(f"{name} must be a number")
+
+        try:
+            count = number("count", 1, 16, 4)
+            output_side = number("output_side", 256, 1024, 512)
+        except ValueError as exc:
+            return str(exc), 400
+
+        suffix = Path(upload.filename).suffix or ".png"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as handle:
+            upload.save(handle)
+            temp_path = Path(handle.name)
+        try:
+            source = imgio.load_image(temp_path)
+        except imgio.ImageLoadError as exc:
+            return str(exc), 400
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+        settings = textguide.BatchSettings(
+            style_key=style_key or "oil_realism",
+            style_label=style_prompts.label_for(style_key or "oil_realism"),
+            style_prompt=style_prompts.prompt_for(style_key),
+            description=description,
+            count=count,
+            output_side=output_side,
+        )
+
+        import time
+
+        started = time.perf_counter()
+        results, warnings = textguide.generate_batch(settings, source)
+        elapsed = time.perf_counter() - started
+
+        if not results:
+            return (
+                "Could not reach the image service. Check your internet connection. "
+                + " ".join(warnings[:2]),
+                502,
+            )
+
+        batch_id = store.put(results)
+        return jsonify(
+            batch_id=batch_id,
+            seconds=elapsed,
+            warnings=warnings,
             images=[
                 {
                     "label": item.style_label,

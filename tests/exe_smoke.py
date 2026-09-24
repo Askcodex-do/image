@@ -48,6 +48,29 @@ def check_style_list(exe: Path, expected: list[str]) -> None:
         assert key in listing, f"style '{key}' missing from `list` output"
 
 
+def check_describe_is_bundled(exe: Path, workdir: Path) -> None:
+    """The AI mode must at least be reachable in the built EXE.
+
+    This deliberately does not hit the network - CI should stay hermetic.  It
+    checks that the `describe` command exists, advertises its options, and
+    rejects bad input cleanly, which catches a module that PyInstaller failed
+    to bundle.
+    """
+    help_result = run(exe, ["describe", "--help"])
+    assert help_result.returncode == 0, "`describe --help` failed"
+    combined = help_result.stdout + help_result.stderr
+    assert "--description" in combined, "describe is missing its description flag"
+    assert "--look" in combined, "describe is missing its look flag"
+
+    # An unknown look must be refused before any request is attempted.
+    source = workdir / "describe-input.png"
+    synthetic_photo(160, 120).save(source)
+    bad = run(exe, ["describe", str(source), "-d", "add a crown", "-t", "not_a_look"])
+    assert bad.returncode == 1, "an unknown look should exit non-zero"
+    assert "unknown look" in (bad.stdout + bad.stderr)
+
+
+
 def check_generation(exe: Path, workdir: Path, styles: list[str]) -> None:
     source = workdir / "input.png"
     synthetic_photo(480, 360).save(source)
@@ -143,6 +166,8 @@ def main(argv: list[str]) -> int:
         check_reproducible_seed(exe, workdir)
         print("== checking bad input handling ==")
         check_bad_input(exe, workdir)
+        print("== checking AI mode is bundled ==")
+        check_describe_is_bundled(exe, workdir)
 
     print("\nAll executable smoke tests passed.")
     return 0
